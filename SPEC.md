@@ -23,7 +23,7 @@ fields possible: a service cannot know who it talks to by looking only at itself
 |---|---|---|---|
 | `service_name` | string | required | parser — repository name |
 | `goal` | string | required | **model** |
-| `evidence` | list of (path, line range) | required | **model** — verified against the source by the checker |
+| `evidence` | list of (path, symbol, lines, content_hash) | required | **model** names path and symbol; parser resolves `lines`; checker computes `content_hash` |
 | `schema` | list of data models | required | parser — AST |
 | `linked_doc` | list of service names | required | parser — imports and calls resolved against the context |
 | `source_id` | string | required | parser — path and commit the claims were read from |
@@ -32,9 +32,11 @@ fields possible: a service cannot know who it talks to by looking only at itself
 | `generated_at` | date | required | pipeline — clock at run time |
 | `diagram` | mermaid source | optional | derived — rendered from `linked_doc` |
 
-`goal` is the only prose the model writes. `evidence` is the model's claim about where
-in the source it read that prose, and a checker re-reads those places to confirm it —
-see [Measurement](#measurement). Every other field is extracted or derived, and
+`goal` is the only prose the model writes. `evidence` is the model's claim about where in
+the source it read that prose: it names a file and a symbol, the parser resolves that symbol
+to a line range, and the checker hashes the region so the claim can be re-checked later —
+see [Measurement](#measurement). Addressing by symbol rather than by line number is what
+lets the citation survive edits above it. Every other field is extracted or derived, and
 therefore cannot be fabricated.
 
 ### Output, level 2 — one object per system
@@ -53,12 +55,38 @@ involved, so nothing here can be invented.
 
 | | |
 |---|---|
-| Input | a level-1 or level-2 object |
-| Output | a markdown file |
-| Producer | template, deterministic |
+| Input | a level-1 or level-2 object, and the unit's working tree at a render commit |
+| Output | a page in a documentation site |
+| Producer | template plus include resolution — deterministic given both inputs |
 
-The rendered page is not part of the measured contract. The same object always
-produces the same page.
+The page does not copy the code it describes. Every region named in `evidence` is
+**transcluded**: the page carries a directive, and the site generator pulls the source in
+at build time. A copy drifts away from its original; an include cannot, because there is
+only one copy of the text. The reader sees the prose and a window onto the code it was
+read from, side by side.
+
+This is why the output is a site rather than a loose `.md` file. Plain markdown has no
+include mechanism, and a git host renders a permalink inside a markdown file as a link,
+not as a window onto the code. The generator has to resolve includes itself. Four do, and
+any of them satisfies this spec:
+
+| Generator | Directive |
+|---|---|
+| Sphinx | `.. literalinclude:: file.py` with `:pyobject: Timer.start` |
+| MkDocs — `pymdownx.snippets` | `--8<-- "file.py:func"` |
+| mdBook | `{{#include file.rs:component}}` with `// ANCHOR: component` in the source |
+| Antora / AsciiDoc | `include::example$file.py[tag=func]` |
+
+**Includes address code by symbol, never by a bare line range.** Every generator above
+offers both forms, and the line-number form is the one that rots: three lines added above
+a cited function, and the window shows the wrong code while still looking correct. A symbol
+survives the shift. Where a symbol cannot be resolved, an anchor comment in the source is
+the fallback; a line range stays the checker's internal record and is never the published
+address.
+
+An include that does not resolve at build time fails the build. A page that quietly lost
+its evidence is worse than a page that never had any, because the prose still reads as
+though it were sourced.
 
 ## Measurement
 
@@ -86,13 +114,38 @@ in the unit it read the claim from, at the commit named in `source_id`.
 
 A checker then re-reads those places. Three outcomes:
 
-- the cited lines exist and contain what the claim says → the claim is **supported**
-- the cited lines exist but do not contain it → the claim is **unsupported**
-- the cited lines do not exist at that commit → the claim is **fabricated**
+- the cited region exists and contains what the claim says → the claim is **supported**
+- the cited region exists but does not contain it → the claim is **unsupported**
+- the cited region does not exist at that commit → the claim is **fabricated**
 
 This is the whole reason the field list is split the way it is: `goal` is the only prose
 the model writes, `evidence` is a claim about the source that the checker can re-read, and
 every remaining field is extracted or derived and so has nothing to invent with.
+
+### Drift: verified once is not verified forever
+
+A claim is verified against one commit. The code then moves on. Without a further
+mechanism the page shows prose that was true in the past beside a window that is true now,
+with nothing to say the two no longer match.
+
+So `evidence` carries a `content_hash` — the hash of the cited region as it stood at
+`source_id`. The check runs again in CI against the current commit: resolve the symbol,
+hash what it now contains, compare.
+
+| Result | What the page shows |
+|---|---|
+| hash unchanged | verified at `<commit>`, code unchanged since |
+| hash changed | verified at `<commit>`, **this code has changed since** — prose not re-verified |
+| symbol gone | the evidence no longer exists: the block is withdrawn and the unit is queued for regeneration |
+
+A region that changes marks itself. That is the property worth having — prose that has
+fallen behind its code cannot sit on the page looking current.
+
+What this does not do: a hash detects change, not falsehood. A rename, a reformat, or an
+added log line changes the hash while the prose stays perfectly true. Drift is therefore a
+**trigger for re-verification, not a verdict**. It says this needs looking at; only a rerun
+of the measurement below says whether the sentence is now wrong. A system that treated
+every hash change as a lie would cry wolf until readers stopped believing the marker.
 
 ### Precedence: code beats prose
 
@@ -166,12 +219,14 @@ is not a measurement.
 | Fabrication rate | share of cases with at least one fabricated statement | 0 — gate |
 | Contradiction rate | same, for contradictions | 0 — gate |
 | Schema validity | share of model responses that parse and validate | 100% — gate |
+| Include resolution | share of `evidence` includes that resolve at build time | 100% — gate |
 | Field accuracy | per field, share of cases matching the reference exactly | per-field floor |
 | Required-fact recall | share of required facts present in `goal` | threshold |
 | Vagueness rate | share of `goal` values judged vague | threshold |
 | Abstention correctness | share of the 4 abstain cases answered by abstaining, and of the other 46 not | threshold |
 | Judge agreement | agreement between judge and author labels on the golden set | threshold |
 | Stability | over N repeats of the same case, share of cases whose verdict never changes | threshold |
+| Stale-block rate | share of published blocks whose cited region changed since verification | reported, with a ceiling |
 | Cost | USD per 1000 files, measured not estimated | reported, with a ceiling |
 | Latency | p50 and p95 per unit | reported, with a ceiling |
 
@@ -179,7 +234,7 @@ Stability is measured because the generator is not deterministic. A number from 
 pass over 50 cases is not a measurement of the system, only of one sample of it; every
 reported figure comes from N repeats, with N recorded next to it.
 
-The three gates are absolute: a run that fails any of them fails, whatever the other
+The four gates are absolute: a run that fails any of them fails, whatever the other
 numbers say. The remaining thresholds are set before the first baseline run and are not
 tuned to the result afterwards. Changing a threshold requires a written reason recorded
 next to the number it replaced.
@@ -194,7 +249,9 @@ would make the table useless as a history.
 
 ### Not measured
 
-The rendered markdown, because the renderer is deterministic and adds no claims. Prose
-style. The context repositories, which are read but never described. Anything about
-repositories that do not follow the one-repository-one-service assumption — those are out
-of scope for v1, and no number here speaks for them.
+The page's layout and the template's wording, because the template states nothing of its
+own — with one exception. The drift marker is a claim, and it is settled by hash comparison
+rather than judged, so it falls under the gates above and not here. Prose style. The
+context repositories, which are read but never described. Anything about repositories that
+do not follow the one-repository-one-service assumption — those are out of scope for v1,
+and no number here speaks for them.
