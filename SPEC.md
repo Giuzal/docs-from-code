@@ -22,8 +22,8 @@ fields possible: a service cannot know who it talks to by looking only at itself
 | Field | Type | Required | Producer |
 |---|---|---|---|
 | `service_name` | string | required | parser — repository name |
-| `goal` | string | required | **model** |
-| `evidence` | list of (path, symbol, lines, content_hash) | required | **model** names path and symbol; parser resolves `lines`; checker computes `content_hash` |
+| `claims` | list of claim objects | required | **model** — see *The claim object* below |
+| `goal` | string | optional | derived — the claim texts joined into one paragraph |
 | `schema` | list of data models | required | parser — AST |
 | `linked_doc` | list of service names | required | parser — imports and calls resolved against the context |
 | `source_id` | string | required | parser — path and commit the claims were read from |
@@ -32,12 +32,39 @@ fields possible: a service cannot know who it talks to by looking only at itself
 | `generated_at` | date | required | pipeline — clock at run time |
 | `diagram` | mermaid source | optional | derived — rendered from `linked_doc` |
 
-`goal` is the only prose the model writes. `evidence` is the model's claim about where in
-the source it read that prose: it names a file and a symbol, the parser resolves that symbol
-to a line range, and the checker hashes the region so the claim can be re-checked later —
-see [Measurement](#measurement). Addressing by symbol rather than by line number is what
-lets the citation survive edits above it. Every other field is extracted or derived, and
-therefore cannot be fabricated.
+`claims` is the only prose the model writes. Every other field is extracted or derived,
+and therefore cannot be fabricated.
+
+### The claim object
+
+A claim is **one checkable sentence, never a paragraph**, and it carries its own evidence.
+Every sentence answers for itself.
+
+| Field | Type | Required | Producer |
+|---|---|---|---|
+| `text` | string | required | **model** — one sentence, one assertion |
+| `kind` | `behaviour` or `intent` | required | **model** |
+| `evidence` | list of (path, symbol, lines, content_hash) | required | **model** names path and symbol; parser resolves `lines`; checker computes `content_hash` |
+
+Decided 30.09.2026. The alternative — one paragraph with a shared list of citations — was
+rejected: when a paragraph makes three assertions and carries two citations, nothing says
+which assertion is unsourced, and the fabrication gate below becomes uncomputable.
+Addressing evidence by symbol rather than by line number is what lets a citation survive
+edits made above it.
+
+**`kind` decides what may prove the claim.**
+
+| `kind` | Claims | Admissible evidence | On the page |
+|---|---|---|---|
+| `behaviour` | what the code does | code only — prose never overrides it | stated plainly |
+| `intent` | why the code exists | prose as well: ADR, README, docstring | labelled *stated intent, not verified behaviour* |
+
+Also decided 30.09.2026. Purpose is the thing a reader most wants and the one thing source
+code never states; banning prose outright would leave the field permanently unanswerable,
+and the tool would describe behaviour accurately while saying nothing about why anything
+exists. The split is the one a technical writer already makes by hand, and the same one
+Diátaxis draws between Reference and Explanation. The reader must always be able to tell
+the two apart, so the label is part of the contract, not a rendering choice.
 
 ### Output, level 2 — one object per system
 
@@ -84,9 +111,19 @@ survives the shift. Where a symbol cannot be resolved, an anchor comment in the 
 the fallback; a line range stays the checker's internal record and is never the published
 address.
 
-An include that does not resolve at build time fails the build. A page that quietly lost
-its evidence is worse than a page that never had any, because the prose still reads as
-though it were sourced.
+**The checker runs before any include is emitted.** It re-resolves every citation against
+the render commit, removes the claims whose evidence no longer exists, leaves a visible mark
+in their place — *evidence lost, this section needs regenerating* — and queues the unit for
+a rerun. Only then does the site build.
+
+An include that still fails to resolve at that point fails the build. The distinction is
+deliberate, and was settled on 30.09.2026: a renamed or deleted function is the normal life
+of code and must not take the documentation site down, whereas a window still broken after
+the checker has run means the checker itself is wrong — which is exactly when a build should
+stop.
+
+Removal is never silent. A page that quietly lost its evidence is worse than a page that
+never had any, because the prose still reads as though it were sourced.
 
 ## Measurement
 
@@ -97,20 +134,21 @@ how it is decided, and what numbers have to hold before a change may ship.
 
 The output makes two kinds of claim, and they cannot be checked the same way.
 
-| | Parser and derived fields | The model's field, `goal` |
+| | Parser and derived fields | The model's field, `claims` |
 |---|---|---|
 | Claim | this value was read from the source | this sentence describes the unit |
-| Check | exact comparison against the reference | judgement against the reference |
-| Wrong means | the extractor is broken | the text says something false, empty, or invented |
+| Check | exact comparison against the reference | judgement against the reference, claim by claim |
+| Wrong means | the extractor is broken | a sentence is false, empty, invented, or filed under the wrong `kind` |
 
 Parser fields are checked by equality, so their correctness is a matter of fact.
-Only `goal` needs a definition of truth, and everything below is mostly about it.
+Only `claims` needs a definition of truth, and everything below is mostly about it.
+**Every verdict below is reached per claim, not per paragraph.**
 
 ### Evidence makes fabrication decidable
 
 A free sentence cannot be verified against a repository. A sentence with citations can.
-So `goal` is never accepted alone: the model must also return `evidence` — the places
-in the unit it read the claim from, at the commit named in `source_id`.
+So no claim is accepted on its own: each one carries its `evidence` — the places in the unit
+it was read from, at the commit named in `source_id`.
 
 A checker then re-reads those places. Three outcomes:
 
@@ -136,7 +174,7 @@ hash what it now contains, compare.
 |---|---|
 | hash unchanged | verified at `<commit>`, code unchanged since |
 | hash changed | verified at `<commit>`, **this code has changed since** — prose not re-verified |
-| symbol gone | the evidence no longer exists: the block is withdrawn and the unit is queued for regeneration |
+| symbol gone | the evidence no longer exists: the claim is withdrawn, a visible mark is left in its place, and the unit is queued for regeneration — see [Stage 2](#stage-2--rendering) |
 
 A region that changes marks itself. That is the property worth having — prose that has
 fallen behind its code cannot sit on the page looking current.
@@ -153,10 +191,17 @@ Comments, docstrings, names, and README text are not evidence of behaviour. They
 evidence of what someone once intended. When a comment and the code it sits on disagree,
 the code is right and the comment is a finding to report, not a source to quote.
 
-A `goal` supported only by a comment that contradicts its own code counts as a
-contradiction, not as a supported claim. This rule exists because the failure it prevents
-is the most common one in the wild, and because it is the rule an LLM breaks first: stale
-prose reads more like documentation than code does.
+A `behaviour` claim supported only by a comment that contradicts its own code counts as a
+contradiction, not as a supported claim. This rule exists because the failure it prevents is
+the most common one in the wild, and because it is the rule an LLM breaks first: stale prose
+reads more like documentation than code does.
+
+**The rule is about behaviour, not about prose as such.** Prose is the only possible witness
+to intent, and an `intent` claim cited to an ADR, a README or a docstring is properly
+supported — provided it is filed as `intent` and carries the label. What is forbidden is
+laundering: dressing a claim about behaviour in prose evidence, or presenting an intent claim
+as verified behaviour. A medical record keeps the patient's account and the measured findings
+side by side and never confuses the two; this is the same discipline.
 
 ### The golden dataset
 
@@ -168,16 +213,21 @@ A reference answer holds:
 | Part | Content |
 |---|---|
 | Parser fields | the exact expected value of every extracted and derived field |
-| Required facts | the statements a correct `goal` must contain |
-| Forbidden facts | the statements a correct `goal` must not contain, with the reason |
+| Required claims | the assertions a correct answer must contain, **each with its expected `kind`** |
+| Forbidden claims | the assertions a correct answer must not contain, with the reason |
 | Verdict | for trap cases, which source the answer must follow and which it must reject |
+
+Labelling is therefore claim by claim, not paragraph by paragraph — a direct consequence of
+the contract decided on 30.09.2026, and the reason the 50 cases take longer to write than
+they would have under the paragraph form.
 
 Composition — chosen so that the traps cannot be averaged away by easy cases:
 
 | Kind | Cases | What it tests |
 |---|---|---|
 | Plain | 28 | ordinary units, no conflicting signals |
-| Traps | 12 | stale comment against live code; endpoint whose name lies; no type hints |
+| Traps — behaviour | 8 | stale comment against live code; endpoint whose name lies; no type hints. Prose must lose |
+| Traps — intent | 4 | an ADR or README stating why the service exists. Prose is the correct source here, and the claim must be filed as `intent` |
 | Cross-service | 6 | `linked_doc` resolved against the context, not guessed from names |
 | Insufficient information | 4 | the correct answer is to abstain, not to produce a plausible sentence |
 
@@ -194,6 +244,7 @@ measured. Cases are pinned to commits, so the repository cannot shift under a co
 | Contradiction | the statement disagrees with the code, including by trusting stale prose | judge |
 | Omission | a required fact from the reference answer is missing | judge |
 | Vagueness | true, but holds for any service — "handles requests", "manages data" | judge |
+| Miskind | a `behaviour` claim cited only to prose, or an `intent` claim presented as verified behaviour | judge |
 | False abstention | abstained on a case the reference answer calls answerable | comparison |
 | Parser error | an extracted or derived field differs from the reference | comparison |
 
@@ -216,13 +267,14 @@ is not a measurement.
 
 | Metric | Definition | Target |
 |---|---|---|
-| Fabrication rate | share of cases with at least one fabricated statement | 0 — gate |
+| Fabrication rate | share of cases with at least one fabricated **claim** | 0 — gate |
 | Contradiction rate | same, for contradictions | 0 — gate |
+| Kind accuracy | share of claims filed under the `kind` the reference answer gives | threshold |
 | Schema validity | share of model responses that parse and validate | 100% — gate |
 | Include resolution | share of `evidence` includes that resolve at build time | 100% — gate |
 | Field accuracy | per field, share of cases matching the reference exactly | per-field floor |
-| Required-fact recall | share of required facts present in `goal` | threshold |
-| Vagueness rate | share of `goal` values judged vague | threshold |
+| Required-claim recall | share of required claims present, with the right `kind` | threshold |
+| Vagueness rate | share of claims judged vague | threshold |
 | Abstention correctness | share of the 4 abstain cases answered by abstaining, and of the other 46 not | threshold |
 | Judge agreement | agreement between judge and author labels on the golden set | threshold |
 | Stability | over N repeats of the same case, share of cases whose verdict never changes | threshold |
