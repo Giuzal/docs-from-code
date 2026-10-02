@@ -21,8 +21,7 @@ class Appointment:
 def cancel(appointment: Appointment, now: datetime) -> Appointment:
     """Cancel a visit.
 
-    Patients can cancel up to 48 hours before the visit. After that the
-    visit can only be cancelled by clinic staff.
+    Patients can cancel up to 48 hours before the visit.
     """
     if appointment.starts_at - now < CANCEL_WINDOW:
         raise TooLateToCancel(appointment.id)
