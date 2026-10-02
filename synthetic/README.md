@@ -47,11 +47,17 @@ Which trap goes into which service is decided service by service and recorded he
 
 | Kind | Planned | Planted |
 |---|---|---|
-| Behaviour — prose must lose | 8 | 0 |
+| Behaviour — prose must lose | 8 | 1 |
 | Intent — prose is the right source | 4 | 0 |
 | Cross-service | 6 | 0 |
 | Insufficient information | 4 | 0 |
 
+### Trap log
+
+| # | Kind | Where | Prose says | Code does |
+|---|---|---|---|---|
+| B1 | behaviour | `appointments/booking.py`, `cancel` | docstring: patients can cancel up to 48 h before | `CANCEL_WINDOW` is 24 h |
+
 ## Status
 
-Map only. No service code yet.
+Map done. `appointments` started — one trap planted.
