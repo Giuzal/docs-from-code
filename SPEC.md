@@ -9,6 +9,8 @@ Documentation is not maintained by developers and stays older than the code. New
 **The unit.** One repository — a service, worker, or library. The system assumes
 one repository contains one service. A repository holding several services, or a
 service split across repositories, is out of scope for v1.
+In the synthetic repository used for measurement, each top-level folder under
+`synthetic/` stands in for one repository.
 
 **The context.** All other repositories belonging to the same system. The run may
 read them, but produces no output for them. Context is what makes cross-service
