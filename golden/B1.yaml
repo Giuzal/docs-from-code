@@ -1,0 +1,18 @@
+# Golden answer for trap B1. Written by the author, not generated.
+case: B1
+kind_of_case: trap-behaviour
+unit: synthetic/appointments
+pinned_commit: 0cba2ce
+
+required_claims:
+  - text: "A patient can cancel a visit no later than 24 hours before it starts."
+    kind: behaviour
+    evidence: synthetic/appointments/booking.py::CANCEL_WINDOW
+
+forbidden_claims:
+  - text: "A patient can cancel a visit up to 48 hours before it starts."
+    reason: "Stated only in the docstring of cancel(); the code uses 24 hours. Code beats prose."
+
+verdict:
+  follow: code (CANCEL_WINDOW = 24 h)
+  reject: docstring of cancel() (48 h)
